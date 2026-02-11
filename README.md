@@ -40,3 +40,7 @@ pnpm dev
 | `pnpm preview` | Preview production build |
 | `pnpm lint` | Run Biome linter |
 | `pnpm format` | Auto-format with Biome |
+
+## Known Bugs
+
+- **Card stacking z-fighting**: Overlapping cards can flicker/z-fight at their edges, especially during the dynamic phase before settling. The z-order system, `polygonOffset`, and `renderOrder` mitigate most cases but don't fully eliminate the issue for all card configurations.

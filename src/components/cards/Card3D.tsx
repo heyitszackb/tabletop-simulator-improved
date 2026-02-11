@@ -17,6 +17,7 @@ import { useCardTexture } from "@/hooks/useCardTexture";
 import { useTablePlane } from "@/hooks/useTablePlane";
 import {
   calculateStackY,
+  getZOrder,
   registerRigidBody,
   unregisterRigidBody,
 } from "@/lib/rigidBodyRegistry";
@@ -34,7 +35,8 @@ import { Euler, Mesh, MeshStandardMaterial, Quaternion } from "three";
 
 const whiteMaterial = new MeshStandardMaterial({ color: "#ffffff" });
 
-// Cards: member of group 1, collides with group 0 (table only, not other cards)
+// Cards: member of group 1, collides with group 0 (table only)
+// Visual stacking is handled by z-order system, not physics collisions
 const CARD_COLLISION_GROUPS = interactionGroups([1], [0]);
 
 type FlipPhase = "idle" | "lift" | "rotate" | "lower";
@@ -107,6 +109,21 @@ export function Card3D({ card }: Card3DProps) {
     const rb = rigidBodyRef.current;
     if (!rb) return;
 
+    // Update renderOrder and polygonOffset per card to prevent z-fighting
+    if (meshRef.current) {
+      const zOrder = getZOrder(card.id);
+      meshRef.current.renderOrder = zOrder;
+      // Dynamically bias depth buffer: higher z-order → more negative factor → renders on top
+      const mats = meshRef.current.material;
+      if (Array.isArray(mats)) {
+        for (const mat of mats) {
+          if ((mat as MeshStandardMaterial).polygonOffset) {
+            (mat as MeshStandardMaterial).polygonOffsetFactor = -(zOrder + 1);
+          }
+        }
+      }
+    }
+
     // --- Flip animation ---
     if (flipPhase.current !== "idle") {
       const phaseDuration = FLIP_DURATION / 3;
@@ -143,10 +160,13 @@ export function Card3D({ card }: Card3DProps) {
         }
       } else if (flipPhase.current === "lower") {
         const liftedY = flipStartY.current + FLIP_LIFT_HEIGHT;
-        const targetY = flipStartY.current;
-        const y = liftedY + (targetY - liftedY) * ease;
+        // Recalculate correct settle Y based on current stack
+        const settleY = calculateStackY(card.id, pos.x, pos.z);
+        const y = liftedY + (settleY - liftedY) * ease;
         rb.setNextKinematicTranslation({ x: pos.x, y, z: pos.z });
         if (t >= 1) {
+          // Snap to exact settle position
+          rb.setTranslation({ x: pos.x, y: settleY, z: pos.z }, true);
           flipPhase.current = "idle";
           hasSettled.current = true;
           // Stay kinematic — no gravity drift
@@ -155,6 +175,16 @@ export function Card3D({ card }: Card3DProps) {
         }
       }
       return;
+    }
+
+    // --- Floor safety clamp (dynamic cards) ---
+    if (rb.bodyType() === 0) {
+      const pos = rb.translation();
+      const minY = CARD_HEIGHT / 2;
+      if (pos.y < minY) {
+        rb.setTranslation({ x: pos.x, y: minY, z: pos.z }, true);
+        rb.setLinvel({ x: rb.linvel().x, y: 0, z: rb.linvel().z }, true);
+      }
     }
 
     // --- Settle to stack height ---
@@ -166,11 +196,12 @@ export function Card3D({ card }: Card3DProps) {
     if (speed > 0.05) return; // still moving
 
     const pos = rb.translation();
-    const targetY = calculateStackY(card.id, pos.x, pos.z);
+    const stackY = calculateStackY(card.id, pos.x, pos.z);
+    const safeY = Math.max(stackY, CARD_HEIGHT / 2);
 
-    // Switch to kinematic and snap to stack height — prevents gravity drift
+    // Switch to kinematic and snap to correct stack height
     rb.setBodyType(2, true);
-    rb.setTranslation({ x: pos.x, y: targetY, z: pos.z }, true);
+    rb.setTranslation({ x: pos.x, y: safeY, z: pos.z }, true);
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     hasSettled.current = true;
@@ -200,29 +231,38 @@ export function Card3D({ card }: Card3DProps) {
     }
   }, [hideCard]);
 
-  const isFlipping = flipPhase.current !== "idle";
-
   // Materials are STATIC — physical body rotation determines which face is up.
   // Default (unrotated): +y = back, -y = face.
   // After 180° X rotation: +y = face, -y = back.
-  const materials = useMemo(
-    () => [
+  // polygonOffset biases depth to prevent z-fighting between overlapping cards.
+  const materials = useMemo(() => {
+    const polyOpts = { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 };
+    return [
       whiteMaterial,
       whiteMaterial,
-      new MeshStandardMaterial({ map: backTexture }), // +y top
-      new MeshStandardMaterial({ map: faceTexture }), // -y bottom
+      new MeshStandardMaterial({ map: backTexture, ...polyOpts }), // +y top
+      new MeshStandardMaterial({ map: faceTexture, ...polyOpts }), // -y bottom
       whiteMaterial,
       whiteMaterial,
-    ],
-    [faceTexture, backTexture],
+    ];
+  }, [faceTexture, backTexture]);
+
+  // Block ALL interaction while flip animation is in progress.
+  // Check flipPhase ref at event time (not render time) to avoid stale closures.
+  const onPointerDown = useCallback(
+    (e: { stopPropagation: () => void; nativeEvent: PointerEvent }) => {
+      if (flipPhase.current !== "idle") return;
+      handlePointerDown(e);
+    },
+    [handlePointerDown],
   );
 
   const onDoubleClick = useCallback(
     (e: { stopPropagation: () => void }) => {
-      if (isFlipping) return;
+      if (flipPhase.current !== "idle") return;
       handleDoubleClick(e);
     },
-    [isFlipping, handleDoubleClick],
+    [handleDoubleClick],
   );
 
   return (
@@ -246,7 +286,7 @@ export function Card3D({ card }: Card3DProps) {
         castShadow
         receiveShadow
         material={materials}
-        onPointerDown={handlePointerDown}
+        onPointerDown={onPointerDown}
         onDoubleClick={onDoubleClick}
       >
         <boxGeometry args={[CARD_WIDTH, CARD_HEIGHT, CARD_DEPTH]} />
