@@ -1,6 +1,7 @@
 import { GameScene } from "@/components/scene/GameScene";
 import { HUD } from "@/components/hud/HUD";
 import { HAND_ZONE_HEIGHT } from "@/constants/dimensions";
+import { bumpZOrder } from "@/lib/rigidBodyRegistry";
 import { screenToWorldOnTable } from "@/lib/screenToWorld";
 import { useDragStore } from "@/stores/useDragStore";
 import { useGameStore } from "@/stores/useGameStore";
@@ -21,8 +22,10 @@ export default function App() {
       useGameStore.getState().removeFromHand(card.id);
       useGameStore.getState().placeCardOnTable(
         { ...card, faceUp: false },
-        worldPos,
+        [worldPos[0], 0.5, worldPos[2]], // Start elevated, settle logic will snap to correct height
       );
+      // Bump z-order so hand card is visually on top
+      bumpZOrder(card.id);
     } else if (dragState.dragSource === "hand" && inHandZone) {
       // Dropped back in hand zone — cancel
       useDragStore.getState().endDrag();

@@ -1,10 +1,11 @@
-import { HAND_ZONE_HEIGHT } from "@/constants/dimensions";
+import { CARD_HEIGHT, HAND_ZONE_HEIGHT } from "@/constants/dimensions";
 import {
   FLICK_IMPULSE_SCALE,
   VELOCITY_SAMPLES,
 } from "@/constants/physics";
 import { isCardBlockedByOthers } from "@/lib/cardOverlapCheck";
 import { averageVelocity, clampVelocity } from "@/lib/mathUtils";
+import { bumpZOrder, calculateStackY } from "@/lib/rigidBodyRegistry";
 import { useDragStore } from "@/stores/useDragStore";
 import { useGameStore } from "@/stores/useGameStore";
 import { useToastStore } from "@/stores/useToastStore";
@@ -65,7 +66,7 @@ export function useCardInteraction(
 
         const body = rigidBodyRef.current;
         if (body && !isInHandZone) {
-          body.setNextKinematicTranslation({ x: wx, y: wy + 0.1, z: wz });
+          body.setNextKinematicTranslation({ x: wx, y: wy + 0.3, z: wz });
         }
 
         if (!isInHandZone) {
@@ -90,14 +91,18 @@ export function useCardInteraction(
         if (isInHandZone) {
           useGameStore.getState().pickUpToHand(cardId);
         } else {
+          // Bump z-order so this card is visually on top of anything it lands on
+          bumpZOrder(cardId);
+
           const body = rigidBodyRef.current;
           if (body) {
-            body.setBodyType(0, true); // Dynamic
-
             const [vx, vz] = clampVelocity(
               ...averageVelocity(pointerSamples.current),
             );
+
             if (Math.abs(vx) > 0.1 || Math.abs(vz) > 0.1) {
+              // Flick — use dynamic physics for sliding
+              body.setBodyType(0, true);
               body.applyImpulse(
                 {
                   x: vx * FLICK_IMPULSE_SCALE,
@@ -106,6 +111,16 @@ export function useCardInteraction(
                 },
                 true,
               );
+            } else {
+              // Gentle drop — snap to correct stack height immediately (stay kinematic)
+              const pos = body.translation();
+              const settleY = calculateStackY(cardId, pos.x, pos.z);
+              body.setTranslation(
+                { x: pos.x, y: Math.max(settleY, CARD_HEIGHT / 2), z: pos.z },
+                true,
+              );
+              body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+              body.setAngvel({ x: 0, y: 0, z: 0 }, true);
             }
           }
         }

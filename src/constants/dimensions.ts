@@ -3,6 +3,9 @@ export const CARD_WIDTH = 0.635;
 export const CARD_HEIGHT = 0.003;
 export const CARD_DEPTH = 0.889;
 
+// Visual gap between stacked cards (larger than CARD_HEIGHT to prevent z-fighting)
+export const CARD_STACK_GAP = 0.01;
+
 // Table dimensions
 export const TABLE_WIDTH = 12;
 export const TABLE_DEPTH = 8;

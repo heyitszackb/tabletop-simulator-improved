@@ -12,7 +12,10 @@ export function CameraController() {
       minDistance={3}
       maxDistance={15}
       enablePan={true}
-      panSpeed={0.5}
+      panSpeed={0.15}
+      zoomSpeed={0.25}
+      enableDamping={true}
+      dampingFactor={0.05}
     />
   );
 }
